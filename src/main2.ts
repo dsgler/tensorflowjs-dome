@@ -248,10 +248,11 @@ async function trainModel(
 }
 
 /**
- * 生成新的名字
+ * 生成新的名字 - 异步版本
+ * 🔥 优化：使用异步 API (data() 替代 dataSync()) 避免 WebGPU 性能警告
  * 🔥 优化：增加长度控制，避免生成过长名字
  */
-function generateName(
+async function generateName(
   model: tf.LayersModel,
   charToIndex: Map<string, number>,
   indexToChar: Map<number, string>,
@@ -259,7 +260,7 @@ function generateName(
   maxLength: number = 10, // 🔥 减小默认最大长度
   temperature: number = 1.0,
   firstLetter?: string
-): string {
+): Promise<string> {
   // 从随机的常见起始字母开始（英文名常见首字母）
   const startLetters = "abcdefghjklmnprstw";
   if (!firstLetter) {
@@ -292,41 +293,41 @@ function generateName(
     // 预测下一个字符
     const prediction = model.predict(inputTensor) as tf.Tensor;
 
-    // 应用温度参数并采样
-    const nextCharIndex = tf.tidy(() => {
-      const probsArray = Array.from(prediction.dataSync());
+    // ✅ 应用温度参数并采样 - 使用异步 data() API
+    // 🔥 改用异步 data() 替代 dataSync()
+    const probsArray = Array.from(await prediction.data());
 
-      // 🔥 长度惩罚：名字越长，越倾向于结束
-      if (name.length >= 6) {
-        // 增加结束标记的概率
-        const boost = Math.min((name.length - 5) * 0.15, 0.6);
-        probsArray[endMarkerIndex] += boost;
+    // 🔥 长度惩罚：名字越长，越倾向于结束
+    if (name.length >= 6) {
+      // 增加结束标记的概率
+      const boost = Math.min((name.length - 5) * 0.15, 0.6);
+      probsArray[endMarkerIndex] += boost;
 
-        // 重新归一化
-        const sum = probsArray.reduce((a: number, b: number) => a + b, 0);
-        for (let i = 0; i < probsArray.length; i++) {
-          probsArray[i] /= sum;
-        }
+      // 重新归一化
+      const sum = probsArray.reduce((a: number, b: number) => a + b, 0);
+      for (let i = 0; i < probsArray.length; i++) {
+        probsArray[i] /= sum;
       }
+    }
 
-      // 温度调整
-      const scaledProbs = probsArray.map((p: number) =>
-        Math.pow(p, 1 / temperature)
-      );
-      const scaledSum = scaledProbs.reduce((a: number, b: number) => a + b, 0);
-      const normalizedProbs = scaledProbs.map((p: number) => p / scaledSum);
+    // 温度调整
+    const scaledProbs = probsArray.map((p: number) =>
+      Math.pow(p, 1 / temperature)
+    );
+    const scaledSum = scaledProbs.reduce((a: number, b: number) => a + b, 0);
+    const normalizedProbs = scaledProbs.map((p: number) => p / scaledSum);
 
-      // 采样
-      const rand = Math.random();
-      let cumulative = 0;
-      for (let i = 0; i < normalizedProbs.length; i++) {
-        cumulative += normalizedProbs[i];
-        if (rand < cumulative) {
-          return i;
-        }
+    // 采样
+    const rand = Math.random();
+    let cumulative = 0;
+    let nextCharIndex = normalizedProbs.length - 1;
+    for (let i = 0; i < normalizedProbs.length; i++) {
+      cumulative += normalizedProbs[i];
+      if (rand < cumulative) {
+        nextCharIndex = i;
+        break;
       }
-      return normalizedProbs.length - 1;
-    });
+    }
 
     inputTensor.dispose();
     prediction.dispose();
@@ -357,9 +358,9 @@ function generateName(
 }
 
 /**
- * 生成多个名字并显示
+ * 生成多个名字并显示 - 异步版本
  */
-function generateNames(
+async function generateNames(
   model: tf.LayersModel,
   charToIndex: Map<string, number>,
   indexToChar: Map<number, string>,
@@ -374,7 +375,7 @@ function generateNames(
   for (let i = 0; i < count; i++) {
     // 🔥 使用更保守的温度值，提高质量
     const temperature = 0.6 + Math.random() * 0.5; // 0.6 到 1.1
-    const name = generateName(
+    const name = await generateName(
       model,
       charToIndex,
       indexToChar,
@@ -534,11 +535,12 @@ async function run() {
   // 7. 生成新名字
   updateStatus("🎨 Generating creative new names...");
   console.time("Generate names");
-  generateNames(model, charToIndex, indexToChar, vocabSize, 20);
+  await generateNames(model, charToIndex, indexToChar, vocabSize, 20);
   console.timeEnd("Generate names");
   updateStatus("🎊 Done! Check out the generated names →");
 
   {
+    // ✅ 注意：pn 函数现在返回 Promise，调用时需要 await 或 .then()
     (window as any).pn = (firstLetter: string) =>
       generateName(
         model,
