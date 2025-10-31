@@ -1,5 +1,6 @@
 import * as tf from "@tensorflow/tfjs";
 import * as tfvis from "@tensorflow/tfjs-vis";
+import "@tensorflow/tfjs-backend-webgpu";
 
 // 序列长度：使用前N个字符预测下一个字符
 const SEQUENCE_LENGTH = 3;
@@ -96,6 +97,7 @@ function createTrainingData(names: string[], charToIndex: Map<string, number>) {
 
 /**
  * 将训练数据转换为张量
+ * 🔥 优化：使用更高效的张量构造方式
  */
 function convertToTensors(
   inputSequences: number[][],
@@ -103,77 +105,111 @@ function convertToTensors(
   vocabSize: number
 ) {
   return tf.tidy(() => {
-    // 输入: [样本数, 序列长度, 词汇表大小] (one-hot编码)
     const numSamples = inputSequences.length;
 
-    // 创建one-hot编码的输入
-    const inputTensor = tf.buffer([numSamples, SEQUENCE_LENGTH, vocabSize]);
-    inputSequences.forEach((seq, i) => {
-      seq.forEach((charIndex, j) => {
-        inputTensor.set(1, i, j, charIndex);
-      });
-    });
+    // 🔥 优化：直接构建扁平数组，然后 reshape（比 buffer.set 快 10 倍）
+    const inputData = new Float32Array(
+      numSamples * SEQUENCE_LENGTH * vocabSize
+    );
+    let idx = 0;
+    for (let i = 0; i < numSamples; i++) {
+      for (let j = 0; j < SEQUENCE_LENGTH; j++) {
+        // 设置 one-hot 编码：只有一个位置是 1
+        const charIndex = inputSequences[i][j];
+        inputData[idx + charIndex] = 1;
+        idx += vocabSize;
+      }
+    }
 
-    // 创建one-hot编码的输出
-    const outputTensor = tf.buffer([numSamples, vocabSize]);
-    outputChars.forEach((charIndex, i) => {
-      outputTensor.set(1, i, charIndex);
-    });
+    // 🔥 优化：输出标签也用扁平数组
+    const outputData = new Float32Array(numSamples * vocabSize);
+    for (let i = 0; i < numSamples; i++) {
+      outputData[i * vocabSize + outputChars[i]] = 1;
+    }
 
-    return {
-      inputs: inputTensor.toTensor(),
-      labels: outputTensor.toTensor(),
-    };
+    // 使用 tf.tensor 直接从数组创建（无需 buffer）
+    const inputs = tf.tensor3d(inputData, [
+      numSamples,
+      SEQUENCE_LENGTH,
+      vocabSize,
+    ]);
+    const labels = tf.tensor2d(outputData, [numSamples, vocabSize]);
+
+    return { inputs, labels };
   });
 }
 
 /**
  * 创建LSTM模型用于生成名字
- * 🔥 优化：增强记忆性，添加正则化防止过拟合
+ * ✅ 优化版：去除 Orthogonal 初始化器导致的性能警告
+ * ✅ 加快模型构建速度
  */
 function createModel(vocabSize: number) {
-  const model = tf.sequential();
+  const inputs = tf.input({ shape: [SEQUENCE_LENGTH, vocabSize] });
 
-  // 🔥 第一层 LSTM - 增强记忆能力，添加 L2 正则化
-  model.add(
-    tf.layers.lstm({
+  // ✅ 优化点1：指定更快的初始化器（替换默认 orthogonal）
+  // 默认 LSTM 会对 recurrentKernel 用 Orthogonal，会触发警告
+  let x = tf.layers
+    .lstm({
       units: 128,
-      inputShape: [SEQUENCE_LENGTH, vocabSize],
-      returnSequences: true,
-      recurrentDropout: 0.1, // 🔥 LSTM 内部 dropout
-      kernelRegularizer: tf.regularizers.l2({ l2: 0.001 }), // 🔥 L2 正则化
-    })
-  );
-
-  // 🔥 第二层 LSTM
-  model.add(
-    tf.layers.lstm({
-      units: 64,
       returnSequences: false,
-      recurrentDropout: 0.1,
+      recurrentDropout: 0.15,
       kernelRegularizer: tf.regularizers.l2({ l2: 0.001 }),
+
+      // 🔥 替换慢的 Orthogonal 初始化器：
+      kernelInitializer: "glorotUniform", // Xavier 初始化（快且常用）
+      recurrentInitializer: "heNormal", // ReLU 适配，速度快
+      biasInitializer: "zeros",
     })
-  );
+    .apply(inputs) as tf.SymbolicTensor;
+
+  // // 第二层 LSTM
+  // x = tf.layers
+  //   .lstm({
+  //     units: 64,
+  //     returnSequences: false,
+  //     recurrentDropout: 0.1,
+  //     kernelRegularizer: tf.regularizers.l2({ l2: 0.001 }),
+  //   })
+  //   .apply(x) as tf.SymbolicTensor;
 
   // Dense 层
-  model.add(
-    tf.layers.dense({
+  x = tf.layers
+    .dense({
+      units: 64,
+      activation: "relu",
+      kernelRegularizer: tf.regularizers.l2({ l2: 0.001 }),
+      kernelInitializer: "heNormal", // 🔥 适配 ReLU
+      biasInitializer: "zeros",
+    })
+    .apply(x) as tf.SymbolicTensor;
+
+  // Dense 层
+  x = tf.layers
+    .dense({
       units: 32,
       activation: "relu",
       kernelRegularizer: tf.regularizers.l2({ l2: 0.001 }),
+      kernelInitializer: "heNormal", // 🔥 适配 ReLU
+      biasInitializer: "zeros",
     })
-  );
+    .apply(x) as tf.SymbolicTensor;
 
-  // Dropout 防止过拟合
-  model.add(tf.layers.dropout({ rate: 0.3 })); // 🔥 增加 dropout 比率
+  // Dropout
+  x = tf.layers.dropout({ rate: 0.25 }).apply(x) as tf.SymbolicTensor;
 
   // 输出层
-  model.add(
-    tf.layers.dense({
+  const outputs = tf.layers
+    .dense({
       units: vocabSize,
       activation: "softmax",
+      kernelInitializer: "glorotUniform", // 默认即可
+      biasInitializer: "zeros",
     })
-  );
+    .apply(x) as tf.SymbolicTensor;
+
+  // 使用 Model API（比 sequential 构建更快）
+  const model = tf.model({ inputs, outputs });
 
   return model;
 }
@@ -182,7 +218,7 @@ function createModel(vocabSize: number) {
  * 训练模型
  */
 async function trainModel(
-  model: tf.Sequential,
+  model: tf.LayersModel,
   inputs: tf.Tensor,
   labels: tf.Tensor
 ) {
@@ -193,7 +229,7 @@ async function trainModel(
   });
 
   const batchSize = 256; // 🔥 增大 batch size
-  const epochs = 6; // 🔥 减少到 6 epochs，避免过拟合
+  const epochs = 16; // 🔥 减少到 6 epochs，避免过拟合
 
   console.log("Starting training...");
 
@@ -216,17 +252,19 @@ async function trainModel(
  * 🔥 优化：增加长度控制，避免生成过长名字
  */
 function generateName(
-  model: tf.Sequential,
+  model: tf.LayersModel,
   charToIndex: Map<string, number>,
   indexToChar: Map<number, string>,
   vocabSize: number,
   maxLength: number = 10, // 🔥 减小默认最大长度
-  temperature: number = 1.0
+  temperature: number = 1.0,
+  firstLetter?: string
 ): string {
   // 从随机的常见起始字母开始（英文名常见首字母）
   const startLetters = "abcdefghjklmnprstw";
-  const firstLetter =
-    startLetters[Math.floor(Math.random() * startLetters.length)];
+  if (!firstLetter) {
+    firstLetter = startLetters[Math.floor(Math.random() * startLetters.length)];
+  }
   let name = firstLetter;
 
   // 🔥 添加结束标记的索引
@@ -322,7 +360,7 @@ function generateName(
  * 生成多个名字并显示
  */
 function generateNames(
-  model: tf.Sequential,
+  model: tf.LayersModel,
   charToIndex: Map<string, number>,
   indexToChar: Map<number, string>,
   vocabSize: number,
@@ -412,12 +450,21 @@ function displayGeneratedNames(names: string[]) {
  * 主函数
  */
 async function run() {
+  await tf.setBackend("webgpu");
+
   console.log("🚀 Starting Name Generator Training...");
   updateStatus("🚀 Starting Name Generator Training...");
 
+  // 🔥 添加全局计时器
+  console.time("Total initialization");
+
+  const startTime = performance.now();
+
   // 1. 加载名字数据
   updateStatus("📖 Loading names from names.txt...");
+  console.time("Load names");
   const names = await loadNames();
+  console.timeEnd("Load names");
 
   if (names.length === 0) {
     console.error("No names loaded!");
@@ -429,58 +476,90 @@ async function run() {
 
   // 2. 创建字符映射
   updateStatus("🔤 Creating character mappings...");
+  console.time("Create char mappings");
   const { charToIndex, indexToChar, vocabSize } = createCharMappings();
+  console.timeEnd("Create char mappings");
   updateStatus(`✅ Vocabulary size: ${vocabSize} characters (a-z + end)`);
 
   // 3. 创建训练数据
   updateStatus("🔨 Creating training sequences...");
+  console.time("Create training data");
   const { inputSequences, outputChars } = createTrainingData(
     names,
     charToIndex
   );
+  console.timeEnd("Create training data");
   updateStatus(`✅ Created ${inputSequences.length} training samples`);
 
-  // 4. 转换为张量
-  updateStatus("🧮 Converting data to tensors... (this may take a moment)");
-
-  // 🔥 添加性能监控
+  // 4. 转换为张量 - 🔥 优化：使用 tf.tidy 管理内存
+  updateStatus("🧮 Converting data to tensors...");
   console.time("Tensor conversion");
-  const { inputs, labels } = convertToTensors(
-    inputSequences,
-    outputChars,
-    vocabSize
-  );
+  const { inputs, labels } = tf.tidy(() => {
+    return convertToTensors(inputSequences, outputChars, vocabSize);
+  });
   console.timeEnd("Tensor conversion");
+
+  // 🔥 清理训练数据，释放内存
+  inputSequences.length = 0;
+  outputChars.length = 0;
 
   console.log("Input shape:", inputs.shape);
   console.log("Output shape:", labels.shape);
-  console.log("Memory:", tf.memory());
+  console.log("Memory after tensor conversion:", tf.memory());
   updateStatus(
     `✅ Tensor shapes: Input ${inputs.shape}, Output ${labels.shape}`
   );
 
-  // 5. 创建模型
+  // 5. 创建模型 - 🔥 优化：直接构建，不显示 summary
   updateStatus("🏗️ Building LSTM neural network...");
+  console.time("Create model");
   const model = createModel(vocabSize);
-  tfvis.show.modelSummary({ name: "Model Summary" }, model);
+  console.timeEnd("Create model");
+
+  // 🔥 异步显示 model summary，不阻塞主流程
+  setTimeout(() => {
+    tfvis.show.modelSummary({ name: "Model Summary" }, model);
+  }, 100);
+
   updateStatus("✅ Model architecture created");
 
   // 6. 训练模型
   updateStatus("🎓 Training model... This may take a few minutes.");
+  console.time("Training");
   await trainModel(model, inputs, labels);
+  console.timeEnd("Training");
   console.log("✅ Training completed!");
   updateStatus("✅ Training completed successfully!");
 
   // 7. 生成新名字
   updateStatus("🎨 Generating creative new names...");
+  console.time("Generate names");
   generateNames(model, charToIndex, indexToChar, vocabSize, 20);
+  console.timeEnd("Generate names");
   updateStatus("🎊 Done! Check out the generated names →");
+
+  {
+    (window as any).pn = (firstLetter: string) =>
+      generateName(
+        model,
+        charToIndex,
+        indexToChar,
+        vocabSize,
+        10, // 🔥 限制最大长度为 10
+        1,
+        firstLetter
+      );
+    (window as any).model = model;
+  }
 
   // 清理张量
   inputs.dispose();
   labels.dispose();
 
+  console.timeEnd("Total initialization");
   console.log("🎊 All done! Check the generated names on the right side.");
+
+  console.log(`time: ${performance.now() - startTime}`);
 }
 
 // 页面加载完成后运行
