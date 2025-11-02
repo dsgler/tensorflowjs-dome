@@ -229,7 +229,7 @@ async function trainModel(
   });
 
   const batchSize = 256; // 🔥 增大 batch size
-  const epochs = 16; // 🔥 减少到 6 epochs，避免过拟合
+  const epochs = 8; // 🔥 减少到 6 epochs，避免过拟合
 
   console.log("Starting training...");
 
@@ -562,6 +562,115 @@ async function run() {
   console.log("🎊 All done! Check the generated names on the right side.");
 
   console.log(`time: ${performance.now() - startTime}`);
+
+  // 🎨 设置生成器界面交互
+  setupGeneratorUI(model, charToIndex, indexToChar, vocabSize);
+}
+
+/**
+ * 设置生成器界面的交互功能
+ */
+function setupGeneratorUI(
+  model: tf.LayersModel,
+  charToIndex: Map<string, number>,
+  indexToChar: Map<number, string>,
+  vocabSize: number
+) {
+  const generatorBox = document.getElementById("generatorBox");
+  const generateBtn = document.getElementById(
+    "generateBtn"
+  ) as HTMLButtonElement;
+  const firstLetterInput = document.getElementById(
+    "firstLetter"
+  ) as HTMLInputElement;
+  const resultBox = document.getElementById("resultBox");
+  const generatedNameEl = document.getElementById("generatedName");
+  const letterBtns = document.querySelectorAll(".letter-btn");
+
+  // 显示生成器界面
+  if (generatorBox) {
+    generatorBox.classList.add("active");
+  }
+
+  // 快速字母按钮点击事件
+  letterBtns.forEach(btn => {
+    btn.addEventListener("click", () => {
+      const letter = btn.getAttribute("data-letter") || "";
+      if (firstLetterInput) {
+        firstLetterInput.value = letter;
+      }
+    });
+  });
+
+  // 输入框只允许输入 a-z
+  if (firstLetterInput) {
+    firstLetterInput.addEventListener("input", e => {
+      const input = e.target as HTMLInputElement;
+      const value = input.value.toLowerCase();
+      if (value && !/^[a-z]$/.test(value)) {
+        input.value = "";
+      } else {
+        input.value = value;
+      }
+    });
+
+    // 支持回车键生成
+    firstLetterInput.addEventListener("keypress", e => {
+      if (e.key === "Enter") {
+        generateBtn?.click();
+      }
+    });
+  }
+
+  // 生成按钮点击事件
+  if (generateBtn) {
+    generateBtn.addEventListener("click", async () => {
+      const firstLetter = firstLetterInput?.value.toLowerCase() || undefined;
+
+      // 禁用按钮，防止重复点击
+      generateBtn.disabled = true;
+      generateBtn.textContent = "🎲 生成中...";
+
+      try {
+        // 调用 pn 函数生成名字
+        const name = await generateName(
+          model,
+          charToIndex,
+          indexToChar,
+          vocabSize,
+          10,
+          0.8, // 使用较保守的温度值
+          firstLetter
+        );
+
+        // 首字母大写
+        const capitalizedName = name.charAt(0).toUpperCase() + name.slice(1);
+
+        // 显示结果
+        if (generatedNameEl) {
+          generatedNameEl.textContent = capitalizedName;
+        }
+        if (resultBox) {
+          resultBox.classList.add("show");
+        }
+
+        console.log(
+          `Generated name: ${capitalizedName}${
+            firstLetter ? ` (starting with '${firstLetter}')` : ""
+          }`
+        );
+      } catch (error) {
+        console.error("Error generating name:", error);
+        if (generatedNameEl) {
+          generatedNameEl.textContent = "生成失败，请重试";
+        }
+      } finally {
+        // 恢复按钮状态
+        generateBtn.disabled = false;
+        generateBtn.textContent = "🎲 生成名字";
+      }
+    });
+  }
 }
 
 // 页面加载完成后运行
