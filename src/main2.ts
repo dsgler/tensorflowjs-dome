@@ -1,6 +1,6 @@
 import * as tf from "@tensorflow/tfjs";
 import * as tfvis from "@tensorflow/tfjs-vis";
-import "@tensorflow/tfjs-backend-webgpu";
+// import "@tensorflow/tfjs-backend-webgpu";
 
 // 序列长度：使用前N个字符预测下一个字符
 const SEQUENCE_LENGTH = 3;
@@ -451,7 +451,7 @@ function displayGeneratedNames(names: string[]) {
  * 主函数
  */
 async function run() {
-  await tf.setBackend("webgpu");
+  // await tf.setBackend("webgpu");
 
   console.log("🚀 Starting Name Generator Training...");
   updateStatus("🚀 Starting Name Generator Training...");

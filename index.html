@@ -1,13 +1,96 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>tf</title>
+    <title>AI Name Generator - TensorFlow.js</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 20px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto",
+          "Oxygen", "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans",
+          "Helvetica Neue", sans-serif;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+      }
+
+      h1 {
+        color: white;
+        text-align: center;
+        margin-bottom: 30px;
+        text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2);
+      }
+
+      .info-box {
+        background: rgba(255, 255, 255, 0.95);
+        padding: 20px;
+        border-radius: 12px;
+        max-width: 800px;
+        margin: 0 auto 20px;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+      }
+
+      .info-box h2 {
+        margin-top: 0;
+        color: #667eea;
+      }
+
+      .info-box p {
+        color: #666;
+        line-height: 1.6;
+      }
+
+      .status {
+        text-align: center;
+        color: white;
+        font-size: 18px;
+        margin: 20px 0;
+        padding: 15px;
+        background: rgba(255, 255, 255, 0.2);
+        border-radius: 8px;
+        max-width: 600px;
+        margin: 20px auto;
+      }
+
+      #app {
+        max-width: 1200px;
+        margin: 0 auto;
+      }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
-    <script type="module" src="/src/main.ts"></script>
+    <div id="app">
+      <h1>🎭 AI English Name Generator</h1>
+
+      <div class="info-box">
+        <h2>📚 About This Project</h2>
+        <p>
+          This is a deep learning model that learns from English names and
+          generates new, unique names. It uses an LSTM (Long Short-Term Memory)
+          neural network to understand the patterns and structures of English
+          names.
+        </p>
+        <p>
+          <strong>⚡ Optimized Model:</strong>
+          LSTM (64 units) → Dense (32, ReLU) → Dropout (0.2) → Output (Softmax)
+        </p>
+        <p>
+          <strong>🎯 Performance:</strong>
+          Using 5,000 names • 20 epochs • Batch size 256 • Fast training!
+        </p>
+        <p>
+          The model learns character-by-character patterns and generates
+          creative new names in just a few minutes!
+        </p>
+      </div>
+
+      <div class="status" id="status">
+        🚀 Loading model and preparing training data...
+      </div>
+    </div>
+
+    <script type="module" src="/src/main2.ts"></script>
   </body>
 </html>
